@@ -217,3 +217,7 @@ __marimo__/
 
 gradio_outputs/
 gradio_outputs_voicedesign/
+
+# 画像、音声ファイル
+*.png
+*.wav

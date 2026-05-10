@@ -289,6 +289,9 @@ def _run_generation(
             result.sample_rate,
         )
         out_paths.append(str(out_path))
+        
+        txt_path = out_dir / f"sample_{stamp}_{i:03d}.txt"
+        txt_path.write_text(text_value, encoding="utf-8")
 
     runtime_msg = "runtime: reloaded" if reloaded else "runtime: reused"
     detail_lines = [
@@ -324,7 +327,17 @@ def build_ui() -> gr.Blocks:
     model_precision_choices = _precision_choices_for_device(default_model_device)
     codec_precision_choices = _precision_choices_for_device(default_codec_device)
 
-    with gr.Blocks(title="Irodori-TTS Gradio") as demo:
+    custom_css = """
+    .emoji-scroll {
+        max-height: 350px;
+        overflow-y: auto;
+        border: 1px solid var(--border-color-primary);
+        border-radius: 8px;
+        padding: 8px;
+        margin-top: 5px;
+    }
+    """
+    with gr.Blocks(title="Irodori-TTS Gradio", css=custom_css) as demo:
         gr.Markdown("# Irodori-TTS Inference (Cached Runtime)")
         gr.Markdown(
             "When settings are unchanged, runtime is reused and only sampling/decoding runs."
@@ -368,6 +381,30 @@ def build_ui() -> gr.Blocks:
             clear_cache_msg = gr.Textbox(label="Model Status", interactive=False)
 
         text = gr.Textbox(label="Text", lines=4)
+        with gr.Accordion("🎨 絵文字パレット (クリックでテキストに追加)", open=False):
+            gr.Markdown("タイルをクリックすると、**絵文字のみ**がテキストの末尾に追加されます。")
+            emojis_with_desc = [
+                ("👂", "囁き、耳元の音"), ("😮‍💨", "吐息、溜息、寝息"), ("⏸️", "間、沈黙"),
+                ("🤭", "笑い（くすくす等）"), ("🥵", "喘ぎ、うめき声、唸り声"), ("📢", "エコー、リバーブ"),
+                ("😏", "からかう、甘える"), ("🥺", "声を震わせる"), ("🌬️", "息切れ、呼吸音"),
+                ("😮", "息をのむ"), ("👅", "舐める音、水音"), ("💋", "リップノイズ"),
+                ("🫶", "優しく"), ("😭", "嗚咽、悲しみ"), ("😱", "悲鳴、叫び、絶叫"),
+                ("😪", "眠そうに、気だるげ"), ("⏩", "早口、急いで"), ("📞", "電話越し風の音"),
+                ("🐢", "ゆっくりと"), ("🥤", "唾を飲み込む音"), ("🤧", "咳き込み、鼻すすり"),
+                ("😒", "舌打ち"), ("😰", "動揺、緊張、どもり"), ("😆", "喜びながら"),
+                ("😠", "怒り、拗ねながら"), ("😲", "驚き、感嘆"), ("🥱", "あくび"),
+                ("😖", "苦しげに"), ("😟", "心配そうに"), ("🫣", "照れながら"),
+                ("🙄", "呆れたように"), ("😊", "楽しげに"), ("👌", "相槌、頷く音"),
+                ("🙏", "懇願するように"), ("🥴", "酔っ払って"), ("🎵", "鼻歌"),
+                ("🤐", "口を塞がれて"), ("😌", "安堵、満足げに"), ("🤔", "疑問の声")
+            ]
+            with gr.Column(elem_classes="emoji-scroll"):
+                for i in range(0, len(emojis_with_desc), 3):
+                    with gr.Row():
+                        for emo, desc in emojis_with_desc[i:i+3]:
+                            btn = gr.Button(value=f"{emo} {desc}", size="sm")
+                            btn.click(lambda t, e=emo: (t or "") + e, inputs=[text], outputs=[text])
+
         uploaded_audio = gr.Audio(
             label="Reference Audio Upload (optional, blank = no-reference mode)",
             type="filepath",
@@ -375,7 +412,7 @@ def build_ui() -> gr.Blocks:
 
         with gr.Accordion("Sampling", open=True):
             with gr.Row():
-                num_steps = gr.Slider(label="Num Steps", minimum=1, maximum=120, value=40, step=1)
+                num_steps = gr.Slider(label="Num Steps", minimum=1, maximum=120, value=20, step=1)
                 num_candidates = gr.Slider(
                     label="Num Candidates",
                     minimum=1,
@@ -498,6 +535,40 @@ def build_ui() -> gr.Blocks:
             outputs=[clear_cache_msg],
         )
         clear_cache_btn.click(_clear_runtime_cache, outputs=[clear_cache_msg])
+
+        with gr.Accordion("📂 最近の生成履歴 (最新5件)", open=False):
+            refresh_hist_btn = gr.Button("履歴を更新")
+            hist_audios = []
+            hist_texts = []
+            with gr.Column():
+                for i in range(5):
+                    with gr.Row():
+                        h_a = gr.Audio(label=f"音声 {i+1}", interactive=False, visible=False)
+                        h_t = gr.Textbox(label="テキスト", interactive=False, visible=False)
+                        hist_audios.append(h_a)
+                        hist_texts.append(h_t)
+            
+            def _load_history():
+                out_dir = Path("gradio_outputs")
+                if not out_dir.exists():
+                    return tuple([gr.update(visible=False)] * 10)
+                wav_files = sorted(out_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]
+                audio_updates = []
+                text_updates = []
+                for wav_path in wav_files:
+                    txt_path = wav_path.with_suffix(".txt")
+                    text_content = txt_path.read_text(encoding="utf-8") if txt_path.exists() else "（テキスト情報なし）"
+                    audio_updates.append(gr.update(value=str(wav_path), visible=True))
+                    text_updates.append(gr.update(value=text_content, visible=True))
+                while len(audio_updates) < 5:
+                    audio_updates.append(gr.update(value=None, visible=False))
+                    text_updates.append(gr.update(value=None, visible=False))
+                return tuple(audio_updates + text_updates)
+            
+            refresh_hist_btn.click(
+                _load_history,
+                outputs=[*hist_audios, *hist_texts]
+            )
 
     return demo
 
