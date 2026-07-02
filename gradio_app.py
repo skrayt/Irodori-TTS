@@ -291,7 +291,7 @@ def _run_generation(
         out_paths.append(str(out_path))
         
         txt_path = out_dir / f"sample_{stamp}_{i:03d}.txt"
-        txt_path.write_text(text_value, encoding="utf-8")
+        txt_path.write_text(str(text), encoding="utf-8")
 
     runtime_msg = "runtime: reloaded" if reloaded else "runtime: reused"
     detail_lines = [
