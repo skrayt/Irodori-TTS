@@ -2,5 +2,8 @@
 echo "=========================================="
 echo "Irodori-TTS (通常版) を起動しています..."
 echo "=========================================="
-cd "/Users/bingoshouhei/Documents/pgm/MyProject/Irodori-TTS"
-uv run python gradio_app.py --server-name 0.0.0.0 --server-port 7860
+# このスクリプトが置かれているディレクトリへ移動（配置場所に依存しない）
+cd "$(dirname "$0")"
+# 既定ではローカルのみ公開 (http://127.0.0.1:7860)。
+# 同一LANの他端末からアクセスしたい場合は --server-name 0.0.0.0 に変更してください。
+uv run python gradio_app.py --server-name 127.0.0.1 --server-port 7860

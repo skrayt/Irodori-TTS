@@ -133,19 +133,20 @@ def find_flattening_point(
     if total_steps <= 0 or window_size <= 0:
         return total_steps
 
-    pad = torch.zeros(
-        (window_size, latent.shape[1]),
-        device=latent.device,
-        dtype=latent.dtype,
-    )
-    padded = torch.cat([latent, pad], dim=0)
-    for i in range(padded.shape[0] - window_size):
-        window = padded[i : i + window_size]
-        window_std = window.std(unbiased=False)
-        window_mean = window.mean()
-        if window_std < std_threshold and torch.abs(window_mean - target_value) < mean_threshold:
-            return int(i)
-    return total_steps
+    # Compute on CPU/fp32 in one shot: a per-step Python loop over GPU tensors
+    # would force a device sync on every window comparison.
+    work = latent.detach().to(device="cpu", dtype=torch.float32)
+    pad = torch.zeros((window_size, work.shape[1]), dtype=work.dtype)
+    padded = torch.cat([work, pad], dim=0)
+    windows = padded.unfold(0, window_size, 1)[:total_steps]
+    flat = windows.reshape(windows.shape[0], -1)
+    window_stds = flat.std(dim=1, unbiased=False)
+    window_means = flat.mean(dim=1)
+    hits = (window_stds < std_threshold) & ((window_means - target_value).abs() < mean_threshold)
+    hit_indices = torch.nonzero(hits, as_tuple=False)
+    if hit_indices.numel() == 0:
+        return total_steps
+    return int(hit_indices[0].item())
 
 
 @dataclass(frozen=True)
@@ -908,13 +909,17 @@ def get_cached_runtime(key: RuntimeKey) -> tuple[InferenceRuntime, bool]:
         if _RUNTIME_CACHE_VALUE is not None and _RUNTIME_CACHE_KEY == key:
             return _RUNTIME_CACHE_VALUE, False
 
-        old_runtime = _RUNTIME_CACHE_VALUE
+        # Free the previous runtime before loading the new one so two models
+        # never occupy device memory at the same time.
+        if _RUNTIME_CACHE_VALUE is not None:
+            old_runtime = _RUNTIME_CACHE_VALUE
+            _RUNTIME_CACHE_KEY = None
+            _RUNTIME_CACHE_VALUE = None
+            old_runtime.unload()
+
         runtime = InferenceRuntime.from_key(key)
         _RUNTIME_CACHE_KEY = key
         _RUNTIME_CACHE_VALUE = runtime
-
-    if old_runtime is not None:
-        old_runtime.unload()
 
     return runtime, True
 
